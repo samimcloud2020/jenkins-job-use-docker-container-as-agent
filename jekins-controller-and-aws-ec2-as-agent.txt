@@ -146,3 +146,114 @@ next------------------create node in jenkins ui
 manage jenkins-------node & cloud-----node---node name:agent1 tick permanent----create-----then configure
 
 all screenshot in screenshot folder
+
+
+
+
+
+-------------if agent in docker container-----------------------------------------------------------------
+
+one docker-compose with one network both jenkins container and ubuntu(as agent node) as container.
+
+version: "3.8"
+services:
+  ubuntu:                                 # as node agent , where job execute
+    image: ubuntu
+    restart: always  
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # this allow to run container inside container.
+    command: ["sleep","infinity"]
+    networks:
+      network:
+        ipv4_address: 10.5.0.19
+  
+  docker:
+    image: docker:dind   #to execute docker command in jenkins
+    container_name: jenkins-docker  
+    restart: always
+    privileged: true
+    command: --storage-driver=overlay2  
+    environment:
+      - DOCKER_TLS_CERTDIR=/certs
+    volumes:
+      - "jenkins-docker-certs:/certs/client"
+      - "jenkins_data:/var/jenkins_home"
+    ports:
+      - "2376:2376"
+    networks:
+      network:
+        ipv4_address: 10.5.0.6
+  jenkins:
+    image: jenkins/jenkins:2.330-jdk8
+    #image: myjenkins-blueocean:2.401.1-1
+    restart: always
+    build:
+      context: .
+      dockerfile: jenkins-Dockerfile
+    privileged: true  
+    #user: root  
+    ports:
+      - 8080:8080
+      - 50000:50000
+    container_name: jenkins-blueocean
+    environment:
+      - DOCKER_HOST=tcp://docker:2376
+      - DOCKER_CERT_PATH=/certs/client
+      - DOCKER_TLS_VERIFY=1   
+    volumes:
+      - "jenkins_data:/var/jenkins_home"
+      - "/var/run/docker.sock:/var/run/docker.sock"  
+      - "jenkins-docker-certs:/certs/client:ro"  
+    networks:
+      network:
+        ipv4_address: 10.5.0.2
+  
+
+networks:
+  network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.5.0.0/16
+          gateway: 10.5.0.1
+volumes:                    #named volume must declare.
+  jenkins_data:
+  jenkins-docker-certs:
+  
+  
+
+in ubuntu(node agent) [ now as container worked] so we again make container(ssh-agent) inside ubuntu container. (docker inside docker called did)
+but DID(did) not recommended as security measures.
+
+let login ubuntu container
+$ docker exec -it <ubuntu cid> bash
+$ apt update && apt install docker.io -y && apt install openjdk-11-jdk -y
+
+$
+$ docker run -d --rm --name=agent2 -p 5555:22 \
+-e "JENKINS_AGENT_SSH_PUBKEY=ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC/wYW5t1eclSlfT9y7qzU92yKmcdY0/pcTHWoZP32API+W3RWJHyLXziwAuhtpQDEVHNBaYAFspHLPCioFNZhmFurZyEjj9/NIOl6OuL0Tolhrw8ey52b+z+txSlFbpWsg9QFIsVW+9Jv/Ue51Xluk3yLHU8GmmoIumZDWZtuF1vZPR55G5FYn8oi9ceFVtA5rT68wqhYlZ0xCrpW0T2/faNu6FLGiPrE+Vhn/P4KdInSJrIkFUpIbDwRTezzhIuUkgXzP/xMW2oAsbZugJqumlCoRG+mJ03Tk1e73Np4jMkz45Bi4Td/H4O0GmX+qARFJi6APBBA1TwwES7aFiG1xWtpSucw7Qgo08PeoboafbR1QnC/YY3r8ggnimzWg1nHOrEsWtdcM8vWnQj/Ig+K43y6tr/Ayb+XWczXpGrEEa9KClbg0hcBxGLiw8K5f04SxSdP8ovup63eBCHesC162haXQLSV6SNtRjFHnbDXru1PZem4VT+lx/0KkI7LEtl0= jenkins@302cb76cc3ce" \
+jenkins/ssh-agent:alpine
+ (here we exposed ssh-agent on port 5555.this 5555 defined when configure agent in jenkins ui advanced tab.
+
+let login ssh-agent container
+$docker exec -it <ssh-agent cid> bash
+$ apk add openjdk11
+$where java -----this o/p taken and paste in when create node in jenkins ui.
+$echo $JAVA_HOME
+
+$ mkdir -p /var/jenkins_home
+$chmod 777 /var/jenkins_home
+
+
+now create agent in jenkins ui
+
+then create a job and configure as trigger-------build from label agent2   (this node take as label agent2)
+bild env: execcute shell echo "hello sam" ----build now
+
+now 
+$ cd /var/jenkins_home
+workspace
+$ cd workspace
+m-1   (its job name which u build and run here)
+
+--------------------------------------------------------------------------------------------------------------------------------
