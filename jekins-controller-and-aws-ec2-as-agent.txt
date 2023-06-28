@@ -1,0 +1,148 @@
+----------------------------------jekins-controller-and-aws-ec2-as-agent:--------------------------------------------
+
+Install jenkins in a VM or Conainer(docker-compose)
+
+As jenkins-controller------------ssh to-------> aws ec2 vm
+
+let say jenkins installed in a Container
+$docker ps
+$docker exec -it -u 0 <cid> bash
+#apt install openjdk-11-jdk -y
+#apt install openssh-server -y     #for ssh-keygen
+
+NOTE:
+
+version: "3.8"
+services:
+ 
+  docker:
+    image: docker:dind   #to execute docker command in jenkins
+    container_name: jenkins-docker  
+    privileged: true
+    command: --storage-driver=overlay2  
+    environment:
+      - DOCKER_TLS_CERTDIR=/certs
+    volumes:
+      - "jenkins-docker-certs:/certs/client"
+      - "jenkins_data:/var/jenkins_home"
+    ports:
+      - "2376:2376"
+    networks:
+      network:
+        ipv4_address: 10.5.0.6
+  jenkins:
+    image: myjenkins-blueocean:2.401.1-1
+    build:
+      context: .
+      dockerfile: jenkins-Dockerfile      #look dockerfile as USER jenkins means jenkins as user owner of all files inside /var/jenkins_home
+    privileged: true  
+    #user: root  
+    ports:
+      - 8080:8080
+      - 50000:50000
+    container_name: jenkins-blueocean
+    environment:
+      - DOCKER_HOST=tcp://docker:2376
+      - DOCKER_CERT_PATH=/certs/client
+      - DOCKER_TLS_VERIFY=1   
+    volumes:
+      - "jenkins_data:/var/jenkins_home"  #note /var/jenkins_home mount in jenkins container
+      - "/var/run/docker.sock:/var/run/docker.sock"  
+      - "jenkins-docker-certs:/certs/client:ro"  
+    networks:
+      network:
+        ipv4_address: 10.5.0.2
+  
+
+networks:
+  network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.5.0.0/16
+          gateway: 10.5.0.1
+volumes:                    #named volume must declare.
+  jenkins_data:
+  jenkins-docker-certs:
+
+
+
+jenkins-Dockerfile :----------------------------------------
+FROM jenkins/jenkins:2.401.1
+USER root
+RUN apt-get update && apt-get install -y lsb-release && apt install openjdk-11-jdk -y && apt install unzip -y
+RUN apt install python3-pip -y
+RUN python3 -m pip install --upgrade --user pip
+RUN python3 -m pip install --user ansible
+
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+RUN unzip awscliv2.zip
+RUN ./aws/install
+RUN curl -fsSLo /usr/share/keyrings/docker-archive-keyring.asc \
+  https://download.docker.com/linux/debian/gpg
+RUN echo "deb [arch=$(dpkg --print-architecture) \
+  signed-by=/usr/share/keyrings/docker-archive-keyring.asc] \
+  https://download.docker.com/linux/debian \
+  $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
+RUN apt-get update && apt-get install -y docker-ce-cli
+USER jenkins    <----------------------------------------------------------------------user as jenkins
+RUN jenkins-plugin-cli --plugins "blueocean docker-workflow"
+
+
+so /var/jenkins_home owner in jenkins container as jenkins user.
+
+next key pair generation: (inside jenkins container)
+$docker exec -it <jenkins cid> bash
+$cd /var/jenkins_home
+$ssh-keygen    (no passphrase) (if passphrase then that password u put in node agent config)
+then /var/jenkins_home/.ssh/    two files created  id_rsa (private key)   id_rsa.pub(public key, you need to push/apply in agent authorized_keys)
+
+also a known_hosts   auto created when jenkins-controller and agent(vm) authenticated so check $cat /var/jenkins_home/.ssh/known_hosts
+
+
+---------------------------------------node agent as ec2 vm---------------------------------------------------------------------------------------
+In vm(node agent)-------
+
+you must install docker, java .
+$apt update -y && apt install docker.io -y & apt install openjdk-11-jdk -y
+$whoami
+ubunu
+
+add to docker group
+$usermod -aG docker $USER
+
+$ chmod 666 /var/run/docker.sock
+
+
+now you want a ssh-agent, so we install as a container.
+
+docker run -d --rm --name=agent1 -p 4444:22 \
+-e "JENKINS_AGENT_SSH_PUBKEY=ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC/wYW5t1eclSlfT9y7qzU92yKmcdY0/pcTHWoZP32API+W3RWJHyLXziwAuhtpQDEVHNBaYAFspHLPCioFNZhmFurZyEjj9/NIOl6OuL0Tolhrw8ey52b+z+txSlFbpWsg9QFIsVW+9Jv/Ue51Xluk3yLHU8GmmoIumZDWZtuF1vZPR55G5FYn8oi9ceFVtA5rT68wqhYlZ0xCrpW0T2/faNu6FLGiPrE+Vhn/P4KdInSJrIkFUpIbDwRTezzhIuUkgXzP/xMW2oAsbZugJqumlCoRG+mJ03Tk1e73Np4jMkz45Bi4Td/H4O0GmX+qARFJi6APBBA1TwwES7aFiG1xWtpSucw7Qgo08PeoboafbR1QnC/YY3r8ggnimzWg1nHOrEsWtdcM8vWnQj/Ig+K43y6tr/Ayb+XWczXpGrEEa9KClbg0hcBxGLiw8K5f04SxSdP8ovup63eBCHesC162haXQLSV6SNtRjFHnbDXru1PZem4VT+lx/0KkI7LEtl0= jenkins@302cb76cc3ce" \
+jenkins/ssh-agent:alpine
+
+
+This public key from jenkins id_rsa.pub 
+and 
+exposed 4444 as ssh(22) 22 port already used ssh of ec2.
+
+
+$docker exec -it <agent cid> bash
+#
+you must install docker, java or any oter job u want to run like maven,gradle,ant etc then install it.
+
+#apk add openjdk11   ------------------------jdk install as apk, as its a alpine container.
+#where java  ------THIS PATH USED IN NODE CREATION TIME.
+/opt/java/openjdk/bin/java
+
+#echo $JAVA_HOME
+/opt/java/openjdk
+
+now create the root dir where job will execute, the path used in node agent.
+# mkdir -p /var/jenkins_home
+#chmod 777 /var/jenkins_home   ------so anybode can read, write and execute.
+
+next------------------create node in jenkins ui
+
+manage jenkins-------node & cloud-----node---node name:agent1 tick permanent----create-----then configure
+
+all screenshot in screenshot folder
